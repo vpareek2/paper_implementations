@@ -33,8 +33,9 @@ Q = C * (D + D * log2(V))
 where C is the max distance of words. Thus, if we choose C = 5, for each training word, we will select randomly a number R in range <1;C> then use R words from history and R words from the future of the word as correct labels.
 
 """
-import nltk
+from typing import List, Tuple
 from collections import Counter
+import nltk
 import torch
 
 # Preprocess the data
@@ -50,18 +51,18 @@ def build_vocabulary(tokens: List[str]) -> List[str]:
 	return vocab
 
 # Convert tokens to integer indicies using the vocab
-def convert_tokens_to_indices(tokens : List[str]) -> List[str]:
-	token_indices = [vocab.index(token) for token in tokens]
-	return token_indices
+def convert_tokens_to_indices(tokens: List[str], vocab: List[str]) -> List[int]:
+    token_indices = [vocab.index(token) for token in tokens]
+    return token_indices
 
 # Create training data by generating pairs of input and output words
 def create_training_data(token_indices: List[int], window_size: int = 2) -> List[Tuple[int, int]]:
-	training_data = []
-	for i, target in enumerate(token_indices):
-		context = token_indices[max(0, i - window_size): i] + token_indices[i+1: min(len(token_indices), + window_size + 1)]
-		for context_word in context:
-			training_data.append(target, context_word)
-	return training_data
+    training_data = []
+    for i, target in enumerate(token_indices):
+        context = token_indices[max(0, i - window_size): i] + token_indices[i+1: min(len(token_indices), i + window_size + 1)]
+        for context_word in context:
+            training_data.append((target, context_word))
+    return training_data
 
 # Convert training data to pytorch tensors
 def convert_training_data_to_tensors(training_data: List[Tuple[int, int]]) -> Tuple[torch.Tensor, torch.Tensor]:
