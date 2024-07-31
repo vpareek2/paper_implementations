@@ -33,10 +33,21 @@ Q = C * (D + D * log2(V))
 where C is the max distance of words. Thus, if we choose C = 5, for each training word, we will select randomly a number R in range <1;C> then use R words from history and R words from the future of the word as correct labels.
 
 """
+import nltk
+from collections import Counter
+import torch
 
 # Preprocess the data
 # Tokenize the text corpus into individual words
+def tokenize_text(text : str) -> List[str]:
+	tokens = nltk.word_tokenize(text)
+	return tokens
+
 # Build a vocabulary, assigning a unique index to each word
+def build_vocabulary(tokens : List[str]) -> List[str]:
+	word_counts = Counter(tokens)
+	vocab = list(word_counts.keys())
+	return vocab
 # Create input/output paris for training based on the context window size (e.g., 2-word context
 
 # Define the CBOW model
