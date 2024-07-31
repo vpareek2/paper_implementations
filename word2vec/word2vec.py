@@ -39,16 +39,35 @@ import torch
 
 # Preprocess the data
 # Tokenize the text corpus into individual words
-def tokenize_text(text : str) -> List[str]:
+def tokenize_text(text: str) -> List[str]:
 	tokens = nltk.word_tokenize(text)
 	return tokens
 
 # Build a vocabulary, assigning a unique index to each word
-def build_vocabulary(tokens : List[str]) -> List[str]:
+def build_vocabulary(tokens: List[str]) -> List[str]:
 	word_counts = Counter(tokens)
 	vocab = list(word_counts.keys())
 	return vocab
-# Create input/output paris for training based on the context window size (e.g., 2-word context
+
+# Convert tokens to integer indicies using the vocab
+def convert_tokens_to_indices(tokens : List[str]) -> List[str]:
+	token_indices = [vocab.index(token) for token in tokens]
+	return token_indices
+
+# Create training data by generating pairs of input and output words
+def create_training_data(token_indices: List[int], window_size: int = 2) -> List[Tuple[int, int]]:
+	training_data = []
+	for i, target in enumerate(token_indices):
+		context = token_indices[max(0, i - window_size): i] + token_indices[i+1: min(len(token_indices), + window_size + 1)]
+		for context_word in context:
+			training_data.append(target, context_word)
+	return training_data
+
+# Convert training data to pytorch tensors
+def convert_training_data_to_tensors(training_data: List[Tuple[int, int]]) -> Tuple[torch.Tensor, torch.Tensor]:
+	input_words = torch.tensor([pair[0] for pair in training_data])
+	output_words = torch.tensor([pair[1] for pair in training_data])
+	return input_words, output_words
 
 # Define the CBOW model
 # Initialize an embedding layer that maps words to vectors
