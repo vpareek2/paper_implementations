@@ -45,6 +45,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torch._dynamo as dynamo
+
+
+# Set up device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
 # Function to download and extract the Text8 dataset
 def download_text8(data_dir: str = './data', url: str = 'http://mattmahoney.net/dc/text8.zip') -> str:
@@ -126,21 +132,20 @@ def convert_training_data_to_tensors(training_data: List[Tuple[int, int]]) -> Tu
 
 # Define the CBOW model
 class CBOWModel(nn.Module):
-	def __init__(self, vocab_size: int, embedding_dim: int) -> None:
-		super(CBOWModel, self).__init__()
+    def __init__(self, vocab_size: int, embedding_dim: int) -> None:
+        super(CBOWModel, self).__init__()
+        # Initialize an embedding layer that maps words to vectors
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.linear = nn.Linear(embedding_dim, vocab_size)
 
-		# Initialize an embedding layer that maps words to vectors
-		self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-		self.linear = nn.Linear(embedding_dim, vocab_size)
-
-	# For each input, average the word vectors within the context window
-	# Pass the averaged vector through a fully connected layer with output size equal to the vocabulary size
-	def forward(self, context_words: torch.Tensor) -> torch.Tensor:
-		embeds = self.embeddings(context_words) 	# (batch_size, context_size, embedding_dim)
-		avg_embeds = torch.mean(embeds, dim=1) 		# (batch_size, embedding_dim)
-		out = self.linear(avg_embeds)			# (batch_size, vocab_size)
-		log_probs = F.log_softmax(out, dim=1)		# (batch_size, vocab_size)
-		return log_probs
+    # For each input, average the word vectors within the context window
+    # Pass the averaged vector through a fully connected layer with output size equal to the vocabulary size
+    def forward(self, context_words: torch.Tensor) -> torch.Tensor:
+        embeds = self.embeddings(context_words)     # (batch_size, context_size, embedding_dim)
+        avg_embeds = torch.mean(embeds, dim=1)      # (batch_size, embedding_dim)
+        out = self.linear(avg_embeds)               # (batch_size, vocab_size)
+        log_probs = F.log_softmax(out, dim=1)       # (batch_size, vocab_size)
+        return log_probs
 
 # Define the Skip-gram model:
 class SkipGramModel(nn.Module):
@@ -160,29 +165,35 @@ class SkipGramModel(nn.Module):
 
 # Custom dataset for handling training data
 class Word2VecDataset(Dataset):
-	def __init__(self, training_data: List[Tuple[int, int]]) -> None:
-		self.training_data = training_data
-	
-	def __len__(self) -> int:
-		return len(self.training_data)
+    def __init__(self, training_data: List[Tuple[int, int]]) -> None:
+        self.training_data = training_data
+    
+    def __len__(self) -> int:
+        return len(self.training_data)
 
-	def __getitem__(self, idx: int) -> Tuple[int, int]:
-		input_word, context_word = self.training_data[idx]
-		return input_word, context_word
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        input_word, context_word = self.training_data[idx]
+        # Use tensors here for CUDA compatibility
+        return torch.tensor(input_word, dtype=torch.long), torch.tensor(context_word, dtype=torch.long)
 
 # Create a DataLoader for batching and shuffling data
 def create_data_loader(training_data: List[Tuple[int, int]], batch_size: int) -> DataLoader:
-	dataset = Word2VecDataset(training_data)
-	return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    dataset = Word2VecDataset(training_data)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 # Define the training loop
 def train_model(model: nn.Module, data_loader: DataLoader, epochs: int, learning_rate: float) -> None:
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=learning_rate)
 
+    # Move model to GPU if available
+    model.to(device)
+
     for epoch in range(epochs):
         total_loss = 0.0
         for input_words, target_words in data_loader:
+            # Move input data to the same device as the model
+            input_words, target_words = input_words.to(device), target_words.to(device)
             model.zero_grad()
             log_probs = model(input_words)
             loss = criterion(log_probs, target_words)
@@ -190,6 +201,18 @@ def train_model(model: nn.Module, data_loader: DataLoader, epochs: int, learning
             optimizer.step()
             total_loss += loss.item()
         print(f'Epoch {epoch + 1}/{epochs}, Loss: {total_loss:.4f}')
+
+def save_model(model: nn.Module, filepath: str) -> None:
+    """
+    Save the model to a file.
+    """
+    torch.save(model.state_dict(), filepath)
+    print(f"Model saved to {filepath}")
+
+# To load the model later, use:
+# model = YourModelClass(*args)
+# model.load_state_dict(torch.load(filepath))
+# model.eval()  # Set the model to evaluation mode
 
 # Usage
 if __name__ == "__main__":
@@ -228,7 +251,14 @@ if __name__ == "__main__":
         print("Invalid model type. Exiting.")
         exit(1)
 
+    # Compile the model for potential speedup (PyTorch 2.0+ feature)
+    model = torch.compile(model)
+
     # Train the model
     train_model(model, data_loader, EPOCHS, LEARNING_RATE)
 
     print("Training completed.")
+
+    # Save the model
+    save_path = f"{model_type}_model.pth"
+    save_model(model, save_path)
