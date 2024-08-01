@@ -1,8 +1,4 @@
-os
 requests
-zipfile
-typing
-collections
 nltk
 torch
 numpy
