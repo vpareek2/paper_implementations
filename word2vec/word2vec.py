@@ -89,11 +89,24 @@ class CBOWModel(nn.Module):
 		out = self.linear(avg_embeds)			# (batch_size, vocab_size)
 		log_probs = F.log_softmax(out, dim=1)		# (batch_size, vocab_size)
 		return log_probs
-# Define the Skip-gram model:
-# Initialize an embedding layer that maps words to vectors
-# For each input word, pass its vector through a fully connected layer with output size equal to the vocabulary size
-# Apply softmax activation to obtain probability distributions over the vocabulary for each training loop
 
+# Define the Skip-gram model:
+class SkipGramModel(nn.module):
+	def __init__(self, vocab_size: int, embedding_dim: int) -> None:
+		super(SkipGramModel, self).__init__()
+
+		# Initialize an embedding layer that maps words to vectors
+		self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+		self.linear = nn.Linear(embedding_dim, vocab_size)		
+
+	# For each input word, pass its vector through a fully connected layer with output size equal to the vocabulary size
+	def forward(self, input_word: torch.Tensor) -> torch.Tensor:
+		embeds = self.embeddings(input_word) 	# (batch_size, embedding_dim)
+		out = self.linear(embeds)		# (batch_size, vocab_size)
+
+		# Apply softmax activation to obtain probability distributions over the vocabulary for each training loop
+		log_probs = F.log_softmax(out, dim=1)	# (batch_size, vocab_size)
+		return log_probs	
 # Define the training loop:
 # Split data into batches
 # For each batch, perform forward propagation (i.e. compute predictions) and calculate loss using cross-entropy loss function.
