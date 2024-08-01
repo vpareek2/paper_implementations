@@ -37,6 +37,8 @@ from typing import List, Tuple
 from collections import Counter
 import nltk
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 # Preprocess the data
 # Tokenize the text corpus into individual words
@@ -66,15 +68,27 @@ def create_training_data(token_indices: List[int], window_size: int = 2) -> List
 
 # Convert training data to pytorch tensors
 def convert_training_data_to_tensors(training_data: List[Tuple[int, int]]) -> Tuple[torch.Tensor, torch.Tensor]:
-	input_words = torch.tensor([pair[0] for pair in training_data])
-	output_words = torch.tensor([pair[1] for pair in training_data])
-	return input_words, output_words
+input_words = torch.tensor([pair[0] for pair in training_data])
+output_words = torch.tensor([pair[1] for pair in training_data])
+return input_words, output_words
 
 # Define the CBOW model
-# Initialize an embedding layer that maps words to vectors
-# For each input, average the word vectors within the context window
-# Pass the averaged vector through a fully connected layer with output size equal to the vocabulary size
+class CBOWModel(nn.Module):
+	def __init__(self, vocab_size: int, embedding_dim: int) -> None:
+		super(CBOWModel, self).__init__()
 
+		# Initialize an embedding layer that maps words to vectors
+		self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+		self.linear = nn.Linear(embedding_dim, vocab_size)
+
+	# For each input, average the word vectors within the context window
+	# Pass the averaged vector through a fully connected layer with output size equal to the vocabulary size
+	def forward(self, context_words: torch.Tensor) -> torch.Tensor:
+		embeds = self.embeddings(context_words) 	# (batch_size, context_size, embedding_dim)
+		avg_embeds = torch.mean(embeds, dim=1) 		# (batch_size, embedding_dim)
+		out = self.linear(avg_embeds)			# (batch_size, vocab_size)
+		log_probs = F.log_softmax(out, dim=1)		# (batch_size, vocab_size)
+		return log_probs
 # Define the Skip-gram model:
 # Initialize an embedding layer that maps words to vectors
 # For each input word, pass its vector through a fully connected layer with output size equal to the vocabulary size
