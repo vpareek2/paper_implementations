@@ -37,9 +37,13 @@ where C is the max distance of words. Thus, if we choose C = 5, for each trainin
 import os
 import requests
 import zipfile
+import numpy as np
+import matplotlib.pyplot as plt
 from typing import List, Tuple
 from collections import Counter
 from torch.utils.data import DataLoader, Dataset
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.manifold import TSNE
 import nltk
 import torch
 import torch.nn as nn
@@ -209,10 +213,75 @@ def save_model(model: nn.Module, filepath: str) -> None:
     torch.save(model.state_dict(), filepath)
     print(f"Model saved to {filepath}")
 
-# To load the model later, use:
-# model = YourModelClass(*args)
-# model.load_state_dict(torch.load(filepath))
-# model.eval()  # Set the model to evaluation mode
+def load_model(mode_type:str, vocab_size:int, embedding_dim:int, filepath:str) -> nn.Module:
+    """
+    Load a saved model.
+    """
+    if model_type == "cbow":
+        model = CBOWModel(vocab_size, embedding_dim)
+    elif model_type == "skipgram":
+        model = SkipGramModel(vocab_size, embedding_dim)
+    else:
+        raise ValueError("Invalid model type")
+    
+    model.load_state_dict(torch.load(filepath))
+    model.eval()  # Set the model to evaluation mode
+    return model
+
+def extract_embeddings(model: nn.Module) -> np.ndarray:
+    """
+    Extract word embeddings from the model.
+    """
+    return model.embeddings.weight.detach().cpu().numpy()
+
+def find_similar_words(word: str, vocab: List[str], embeddings: np.ndarray, top_k: int = 5) -> List[Tuple[str, float]]:
+    """
+    Find the top-k similar words to a given word.
+    """
+    if word not in vocab:
+        raise ValueError(f"Word '{word}' not in vocabulary")
+    
+    word_idx = vocab.index(word)
+    word_embedding = embeddings[word_idx]
+    
+    similarities = cosine_similarity([word_embedding], embeddings)[0]
+    most_similar = similarities.argsort()[-top_k-1:-1][::-1]
+    
+    return [(vocab[idx], similarities[idx]) for idx in most_similar if vocab[idx] != word]
+
+def visualize_embeddings(words: List[str], vocab: List[str], embeddings: np.ndarray) -> None:
+    """
+    Visualize word embeddings using t-SNE.
+    """
+    word_embeddings = [embeddings[vocab.index(word)] for word in words if word in vocab]
+    
+    tsne = TSNE(n_components=2, random_state=0)
+    embeddings_2d = tsne.fit_transform(word_embeddings)
+    
+    plt.figure(figsize=(10, 8))
+    for i, word in enumerate(words):
+        if word in vocab:
+            x, y = embeddings_2d[i]
+            plt.scatter(x, y)
+            plt.annotate(word, (x, y))
+    
+    plt.title("t-SNE visualization of word embeddings")
+    plt.show()
+
+def analyze_analogy(word1: str, word2: str, word3: str, vocab: List[str], embeddings: np.ndarray) -> str:
+    """
+    Solve word analogies (e.g., "man" is to "woman" as "king" is to "queen").
+    """
+    if not all(word in vocab for word in [word1, word2, word3]):
+        raise ValueError("All words must be in the vocabulary")
+    
+    vector = (embeddings[vocab.index(word2)] - embeddings[vocab.index(word1)] + 
+              embeddings[vocab.index(word3)])
+    
+    similarities = cosine_similarity([vector], embeddings)[0]
+    most_similar = similarities.argsort()[-1]
+    
+    return vocab[most_similar]
 
 # Usage
 if __name__ == "__main__":
@@ -262,3 +331,27 @@ if __name__ == "__main__":
     # Save the model
     save_path = f"{model_type}_model.pth"
     save_model(model, save_path)
+
+     # After training and saving the model:
+    model_type = "cbow"  # or "skipgram", depending on what you chose earlier
+    save_path = f"{model_type}_model.pth"
+
+    # Load the model
+    loaded_model = load_model(model_type, VOCAB_SIZE, EMBEDDING_DIM, save_path)
+
+    # Extract embeddings
+    embeddings = extract_embeddings(loaded_model)
+
+    # Find similar words
+    word = "king"
+    similar_words = find_similar_words(word, vocab, embeddings)
+    print(f"Words similar to '{word}': {similar_words}")
+
+    # Visualize embeddings
+    words_to_visualize = ["king", "queen", "man", "woman", "prince", "princess", "boy", "girl"]
+    visualize_embeddings(words_to_visualize, vocab, embeddings)
+
+    # Analyze analogy
+    word1, word2, word3 = "man", "woman", "king"
+    analogy_result = analyze_analogy(word1, word2, word3, vocab, embeddings)
+    print(f"'{word1}' is to '{word2}' as '{word3}' is to '{analogy_result}'")

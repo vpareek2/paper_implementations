@@ -5,3 +5,6 @@ typing
 collections
 nltk
 torch
+numpy
+scikit-learn
+matplotlib
