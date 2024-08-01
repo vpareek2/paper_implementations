@@ -181,7 +181,7 @@ def train_model(model: nn.Module, data_loader: DataLoader, epochs: int, learning
 			total_loss += loss.item()
 		print(f'Epoch {epoch + 1}/{epochs}, Loss: {total_loss:.4f}')
 
-# Usgae
+# Usage
 if __name__ == "__main__":
 	
 	# Download and preprocess the Text8 dataset
