@@ -48,39 +48,51 @@ import torch.optim as optim
 
 # Function to download and extract the Text8 dataset
 def download_text8(data_dir: str = './data', url: str = 'http://mattmahoney.net/dc/text8.zip') -> str:
-	os.makedirs(data_dir, exist_ok=True)
-	zip_path = os.path.join(data_dir, 'text8.zip')
-	text8_path = os.path.join(data_dir, 'text8')
+    os.makedirs(data_dir, exist_ok=True)
+    zip_path = os.path.join(data_dir, 'text8.zip')
+    text8_path = os.path.join(data_dir, 'text8')
 
-	if not os.path.exists(text8_path):
-		# Download the file
-		print("Downloading Text8 dataset...")
-		response = requests.get(url)
-		with open(zip_path, 'wb') as f:
-				f.write(response.content)
-	
-		# Extract the file
-		with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-				zip_ref.extractall(data_dir)
-		os.remove(zip_path)
-	else:
-		print("Text8 dataset already downloaded.")
-	return text8_path
+    if not os.path.exists(text8_path):
+        try:
+            # Download the file
+            print("Downloading Text8 dataset...")
+            response = requests.get(url)
+            response.raise_for_status()  # Raises an HTTPError for bad responses
+            with open(zip_path, 'wb') as f:
+                f.write(response.content)
+        
+            # Extract the file
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(data_dir)
+            os.remove(zip_path)
+        except requests.RequestException as e:
+            print(f"Error downloading the dataset: {e}")
+            return None
+        except zipfile.BadZipFile:
+            print("Error: The downloaded file is not a valid zip file.")
+            return None
+    else:
+        print("Text8 dataset already downloaded.")
+    return text8_path
  
 # Preprocess the data
-def preprocess_text8(text8_path: str) -> List[int]:
-    # Load the dataset
-    with open(text8_path, 'r') as f:
-        text = f.read()
-    
-    # Tokenize the text into individual words
-    tokens = nltk.word_tokenize(text)
-    
-    # Build vocabulary and convert to indices
-    vocab = build_vocabulary(tokens)
-    token_indices = convert_tokens_to_indices(tokens, vocab)
-    return token_indices, vocab
+def preprocess_text8(text8_path: str) -> Tuple[List[int], List[str]]:
+    try:
+        # Load the dataset
+        with open(text8_path, 'r') as f:
+            text = f.read()
 
+        # Tokenize the text into individual words
+        tokens = nltk.word_tokenize(text)
+    
+        # Build vocabulary and convert to indices
+        vocab = build_vocabulary(tokens)
+        token_indices = convert_tokens_to_indices(tokens, vocab)
+        return token_indices, vocab
+    except Exception as e:
+        print(f"Error preprocessing the dataset: {e}")
+        return None, None
+    
 # Tokenize the text corpus into individual words
 def tokenize_text(text: str) -> List[str]:
 	tokens = nltk.word_tokenize(text)
@@ -131,23 +143,20 @@ class CBOWModel(nn.Module):
 		return log_probs
 
 # Define the Skip-gram model:
-class SkipGramModel(nn.module):
-	def __init__(self, vocab_size: int, embedding_dim: int) -> None:
-		super(SkipGramModel, self).__init__()
+class SkipGramModel(nn.Module):
+    def __init__(self, vocab_size: int, embedding_dim: int) -> None:
+        super(SkipGramModel, self).__init__()
+        # Initialize an embedding layer that maps words to vectors
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.linear = nn.Linear(embedding_dim, vocab_size)        
 
-		# Initialize an embedding layer that maps words to vectors
-		self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-		self.linear = nn.Linear(embedding_dim, vocab_size)		
-
-	# For each input word, pass its vector through a fully connected layer with output size equal to the vocabulary size
-	def forward(self, input_word: torch.Tensor) -> torch.Tensor:
-		embeds = self.embeddings(input_word) 	# (batch_size, embedding_dim)
-		out = self.linear(embeds)		# (batch_size, vocab_size)
-
-		# Apply softmax activation to obtain probability distributions over the vocabulary for each training loop
-		log_probs = F.log_softmax(out, dim=1)	# (batch_size, vocab_size)
-		return log_probs
-	
+    # For each input word, pass its vector through a fully connected layer with output size equal to the vocabulary size
+    def forward(self, input_word: torch.Tensor) -> torch.Tensor:
+        embeds = self.embeddings(input_word)    # (batch_size, embedding_dim)
+        out = self.linear(embeds)               # (batch_size, vocab_size)
+        # Apply softmax activation to obtain probability distributions over the vocabulary for each training loop
+        log_probs = F.log_softmax(out, dim=1)   # (batch_size, vocab_size)
+        return log_probs
 
 # Custom dataset for handling training data
 class Word2VecDataset(Dataset):
@@ -168,44 +177,58 @@ def create_data_loader(training_data: List[Tuple[int, int]], batch_size: int) ->
 
 # Define the training loop
 def train_model(model: nn.Module, data_loader: DataLoader, epochs: int, learning_rate: float) -> None:
-	criterion = nn.CrossEntropyLoss()
-	optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate)
 
-	for epoch in range(epochs):
-		total_loss = 0.0
-		for input_words, target_words in data_loader:
-			model.zero_grad()
-			log_probs = model(input_words)
-			loss = criterion(log_probs, target_words)
-			loss.backward()
-			optimizer.step()
-			total_loss += loss.item()
-		print(f'Epoch {epoch + 1}/{epochs}, Loss: {total_loss:.4f}')
+    for epoch in range(epochs):
+        total_loss = 0.0
+        for input_words, target_words in data_loader:
+            model.zero_grad()
+            log_probs = model(input_words)
+            loss = criterion(log_probs, target_words)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        print(f'Epoch {epoch + 1}/{epochs}, Loss: {total_loss:.4f}')
 
 # Usage
 if __name__ == "__main__":
-	
-	# Download and preprocess the Text8 dataset
-	text8_path = download_text8()
-	token_indices, vocab = preprocess_text8(text8_path)
-	
-	# Create training data
-	training_data = create_training_data(token_indices)
+    
+    # Download and preprocess the Text8 dataset
+    text8_path = download_text8()
+    if text8_path is None:
+        print("Failed to download or extract the dataset. Exiting.")
+        exit(1)
 
-	# Constants
-	VOCAB_SIZE = len(vocab)
-	EMBEDDING_DIM = 100
-	BATCH_SIZE = 256
-	EPOCHS = 5
-	LEARNING_RATE = 0.01
+    token_indices, vocab = preprocess_text8(text8_path)
+    if token_indices is None or vocab is None:
+        print("Failed to preprocess the dataset. Exiting.")
+        exit(1)
+    
+    # Create training data
+    training_data = create_training_data(token_indices)
 
-	# Create DataLoader
-	data_loader = create_data_loader(training_data, BATCH_SIZE)
-	
-	# Initialize and train the CBOW model
-	cbow_model = CBOWModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM)
-	train_model(cbow_model, data_loader, EPOCHS, LEARNING_RATE)
+    # Constants
+    VOCAB_SIZE = len(vocab)
+    EMBEDDING_DIM = 100
+    BATCH_SIZE = 256
+    EPOCHS = 5
+    LEARNING_RATE = 0.01
 
-	# For the Skip-gram model, it would be similar
-	# skipgram_model = SkipGramModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM)
-	# train_model(skipgram_model, data_loader, EPOCHS, LEARNING_RATE)
+    # Create DataLoader
+    data_loader = create_data_loader(training_data, BATCH_SIZE)
+    
+    # Model selection
+    model_type = input("Choose model type (cbow/skipgram): ").lower()
+    if model_type == "cbow":
+        model = CBOWModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM)
+    elif model_type == "skipgram":
+        model = SkipGramModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM)
+    else:
+        print("Invalid model type. Exiting.")
+        exit(1)
+
+    # Train the model
+    train_model(model, data_loader, EPOCHS, LEARNING_RATE)
+
+    print("Training completed.")
