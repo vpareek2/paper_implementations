@@ -53,32 +53,33 @@ def download_text8(data_dir: str = './data', url: str = 'http://mattmahoney.net/
 	text8_path = os.path.join(data_dir, 'text8')
 
 	if not os.path.exists(text8_path):
-        	# Download the file
-        	print("Downloading Text8 dataset...")
-        	response = requests.get(url)
-        	with open(zip_path, 'wb') as f:
-            		f.write(response.content)
-        
-        	# Extract the file
-        	with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            		zip_ref.extractall(data_dir)
-        	os.remove(zip_path)
-    	else:
-        	print("Text8 dataset already downloaded.")
+		# Download the file
+		print("Downloading Text8 dataset...")
+		response = requests.get(url)
+		with open(zip_path, 'wb') as f:
+				f.write(response.content)
+	
+		# Extract the file
+		with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+				zip_ref.extractall(data_dir)
+		os.remove(zip_path)
+	else:
+		print("Text8 dataset already downloaded.")
 	return text8_path
  
 # Preprocess the data
-def preprocess_text8(taxt8_path: str) -> List[int]:
-	# Load the dataset
-	with open(text8_path, 'r') as f:
-
-	# Tokenize the text into individual words
-	tokens = nltk.word_tokenize(text)
-	
-	# Build vocabulary and convert to indices
-	vocab = build_vocabulary(tokens)
-	token_indices = convert_tokens_to_indicies(tokens, vocab)
-	return token_indices, vocab
+def preprocess_text8(text8_path: str) -> List[int]:
+    # Load the dataset
+    with open(text8_path, 'r') as f:
+        text = f.read()
+    
+    # Tokenize the text into individual words
+    tokens = nltk.word_tokenize(text)
+    
+    # Build vocabulary and convert to indices
+    vocab = build_vocabulary(tokens)
+    token_indices = convert_tokens_to_indices(tokens, vocab)
+    return token_indices, vocab
 
 # Tokenize the text corpus into individual words
 def tokenize_text(text: str) -> List[str]:
@@ -107,9 +108,9 @@ def create_training_data(token_indices: List[int], window_size: int = 2) -> List
 
 # Convert training data to pytorch tensors
 def convert_training_data_to_tensors(training_data: List[Tuple[int, int]]) -> Tuple[torch.Tensor, torch.Tensor]:
-input_words = torch.tensor([pair[0] for pair in training_data])
-output_words = torch.tensor([pair[1] for pair in training_data])
-return input_words, output_words
+	input_words = torch.tensor([pair[0] for pair in training_data])
+	output_words = torch.tensor([pair[1] for pair in training_data])
+	return input_words, output_words
 
 # Define the CBOW model
 class CBOWModel(nn.Module):
