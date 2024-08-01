@@ -33,14 +33,53 @@ Q = C * (D + D * log2(V))
 where C is the max distance of words. Thus, if we choose C = 5, for each training word, we will select randomly a number R in range <1;C> then use R words from history and R words from the future of the word as correct labels.
 
 """
+
+import os
+import requests
+import zipfile
 from typing import List, Tuple
 from collections import Counter
+from torch.utils.data import DataLoader, Dataset
 import nltk
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 
+# Function to download and extract the Text8 dataset
+def download_text8(data_dir: str = './data', url: str = 'http://mattmahoney.net/dc/text8.zip') -> str:
+	os.makedirs(data_dir, exist_ok=True)
+	zip_path = os.path.join(data_dir, 'text8.zip')
+	text8_path = os.path.join(data_dir, 'text8')
+
+	if not os.path.exists(text8_path):
+        	# Download the file
+        	print("Downloading Text8 dataset...")
+        	response = requests.get(url)
+        	with open(zip_path, 'wb') as f:
+            		f.write(response.content)
+        
+        	# Extract the file
+        	with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            		zip_ref.extractall(data_dir)
+        	os.remove(zip_path)
+    	else:
+        	print("Text8 dataset already downloaded.")
+	return text8_path
+ 
 # Preprocess the data
+def preprocess_text8(taxt8_path: str) -> List[int]:
+	# Load the dataset
+	with open(text8_path, 'r') as f:
+
+	# Tokenize the text into individual words
+	tokens = nltk.word_tokenize(text)
+	
+	# Build vocabulary and convert to indices
+	vocab = build_vocabulary(tokens)
+	token_indices = convert_tokens_to_indicies(tokens, vocab)
+	return token_indices, vocab
+
 # Tokenize the text corpus into individual words
 def tokenize_text(text: str) -> List[str]:
 	tokens = nltk.word_tokenize(text)
@@ -106,9 +145,66 @@ class SkipGramModel(nn.module):
 
 		# Apply softmax activation to obtain probability distributions over the vocabulary for each training loop
 		log_probs = F.log_softmax(out, dim=1)	# (batch_size, vocab_size)
-		return log_probs	
-# Define the training loop:
-# Split data into batches
-# For each batch, perform forward propagation (i.e. compute predictions) and calculate loss using cross-entropy loss function.
-# Perform backpropagation to compute gradients with respect to model parameters
-#Update the model parameteres using suitable optimization algorithm (e.g., stochastic gradient descent
+		return log_probs
+	
+
+# Custom dataset for handling training data
+class Word2VecDataset(Dataset):
+	def __init__(self, training_data: List[Tuple[int, int]]) -> None:
+		self.training_data = training_data
+	
+	def __len__(self) -> int:
+		return len(self.training_data)
+
+	def __getitem__(self, idx: int) -> Tuple[int, int]:
+		input_word, context_word = self.training_data[idx]
+		return input_word, context_word
+
+# Create a DataLoader for batching and shuffling data
+def create_data_loader(training_data: List[Tuple[int, int]], batch_size: int) -> DataLoader:
+	dataset = Word2VecDataset(training_data)
+	return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+# Define the training loop
+def train_model(model: nn.Module, data_loader: DataLoader, epochs: int, learning_rate: float) -> None:
+	criterion = nn.CrossEntropyLoss()
+	optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+
+	for epoch in range(epochs):
+		total_loss = 0.0
+		for input_words, target_words in data_loader:
+			model.zero_grad()
+			log_probs = model(input_words)
+			loss = criterion(log_probs, target_words)
+			loss.backward()
+			optimizer.step()
+			total_loss += loss.item()
+		print(f'Epoch {epoch + 1}/{epochs}, Loss: {total_loss:.4f}')
+
+# Usgae
+if __name__ == "__main__":
+	
+	# Download and preprocess the Text8 dataset
+	text8_path = download_text8()
+	token_indices, vocab = preprocess_text8(text8_path)
+	
+	# Create training data
+	training_data = create_training_data(token_indices)
+
+	# Constants
+	VOCAB_SIZE = len(vocab)
+	EMBEDDING_DIM = 100
+	BATCH_SIZE = 256
+	EPOCHS = 5
+	LEARNING_RATE = 0.01
+
+	# Create DataLoader
+	data_loader = create_data_loader(training_data, BATCH_SIZE)
+	
+	# Initialize and train the CBOW model
+	cbow_model = CBOWModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM)
+	train_model(cbow_model, data_loader, EPOCHS, LEARNING_RATE)
+
+	# For the Skip-gram model, it would be similar
+	# skipgram_model = SkipGramModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM)
+	# train_model(skipgram_model, data_loader, EPOCHS, LEARNING_RATE)
