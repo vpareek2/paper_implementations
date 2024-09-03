@@ -37,6 +37,7 @@ where C is the max distance of words. Thus, if we choose C = 5, for each trainin
 import os
 import requests
 import zipfile
+import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Tuple
@@ -44,13 +45,16 @@ from collections import Counter
 from torch.utils.data import DataLoader, Dataset
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.manifold import TSNE
+from tqdm import tqdm
 import nltk
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torch._dynamo as dynamo
+# import torch._dynamo as dynamo
 
+# Download the NLTK tokenizer
+nltk.download('punkt', quiet=True)
 
 # Set up device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -85,20 +89,37 @@ def download_text8(data_dir: str = './data', url: str = 'http://mattmahoney.net/
         print("Text8 dataset already downloaded.")
     return text8_path
  
-# Preprocess the data
-def preprocess_text8(text8_path: str) -> Tuple[List[int], List[str]]:
+def preprocess_text8(text8_path: str, vocab_size: int = 50000, save_path: str = 'preprocessed_data.pkl') -> Tuple[List[int], List[str]]:
+    # Check if preprocessed data already exists
+    if os.path.exists(save_path):
+        print(f"Loading preprocessed data from {save_path}")
+        with open(save_path, 'rb') as f:
+            return pickle.load(f)
+
+    print("Preprocessing data...")
     try:
-        # Load the dataset
+        # Read the file and tokenize
         with open(text8_path, 'r') as f:
             text = f.read()
+        tokens = nltk.word_tokenize(text.lower())
 
-        # Tokenize the text into individual words
-        tokens = nltk.word_tokenize(text)
-    
-        # Build vocabulary and convert to indices
-        vocab = build_vocabulary(tokens)
-        token_indices = convert_tokens_to_indices(tokens, vocab)
+        # Build vocabulary
+        print("Building vocabulary...")
+        word_counts = Counter(tokens)
+        vocab = ["<unk>"] + [word for word, _ in word_counts.most_common(vocab_size - 1)]
+        word_to_index = {word: i for i, word in enumerate(vocab)}
+
+        # Convert tokens to indices
+        print("Converting tokens to indices...")
+        token_indices = [word_to_index.get(token, 0) for token in tqdm(tokens, desc="Processing")]
+
+        # Save preprocessed data
+        print(f"Saving preprocessed data to {save_path}")
+        with open(save_path, 'wb') as f:
+            pickle.dump((token_indices, vocab), f)
+
         return token_indices, vocab
+
     except Exception as e:
         print(f"Error preprocessing the dataset: {e}")
         return None, None
@@ -120,12 +141,14 @@ def convert_tokens_to_indices(tokens: List[str], vocab: List[str]) -> List[int]:
     return token_indices
 
 # Create training data by generating pairs of input and output words
-def create_training_data(token_indices: List[int], window_size: int = 2) -> List[Tuple[int, int]]:
+def create_training_data(token_indices: List[int], window_size: int = 2) -> List[Tuple[List[int], int]]:
     training_data = []
-    for i, target in enumerate(token_indices):
-        context = token_indices[max(0, i - window_size): i] + token_indices[i+1: min(len(token_indices), i + window_size + 1)]
-        for context_word in context:
-            training_data.append((target, context_word))
+    for i in range(len(token_indices)):
+        context_start = max(0, i - window_size)
+        context_end = min(len(token_indices), i + window_size + 1)
+        context = token_indices[context_start:i] + token_indices[i+1:context_end]
+        if len(context) == 2 * window_size:  # Ensure context is always the same size
+            training_data.append((context, token_indices[i]))
     return training_data
 
 # Convert training data to pytorch tensors
@@ -136,75 +159,76 @@ def convert_training_data_to_tensors(training_data: List[Tuple[int, int]]) -> Tu
 
 # Define the CBOW model
 class CBOWModel(nn.Module):
-    def __init__(self, vocab_size: int, embedding_dim: int) -> None:
+    def __init__(self, vocab_size: int, embedding_dim: int, context_size: int) -> None:
         super(CBOWModel, self).__init__()
-        # Initialize an embedding layer that maps words to vectors
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
         self.linear = nn.Linear(embedding_dim, vocab_size)
+        self.context_size = context_size
 
-    # For each input, average the word vectors within the context window
-    # Pass the averaged vector through a fully connected layer with output size equal to the vocabulary size
     def forward(self, context_words: torch.Tensor) -> torch.Tensor:
+        # context_words shape: (batch_size, context_size)
         embeds = self.embeddings(context_words)     # (batch_size, context_size, embedding_dim)
-        avg_embeds = torch.mean(embeds, dim=1)      # (batch_size, embedding_dim)
+        avg_embeds = embeds.mean(dim=1)             # (batch_size, embedding_dim)
         out = self.linear(avg_embeds)               # (batch_size, vocab_size)
-        log_probs = F.log_softmax(out, dim=1)       # (batch_size, vocab_size)
-        return log_probs
+        return out
 
 # Define the Skip-gram model:
 class SkipGramModel(nn.Module):
     def __init__(self, vocab_size: int, embedding_dim: int) -> None:
         super(SkipGramModel, self).__init__()
-        # Initialize an embedding layer that maps words to vectors
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.linear = nn.Linear(embedding_dim, vocab_size)        
+        self.linear = nn.Linear(embedding_dim, vocab_size)
 
-    # For each input word, pass its vector through a fully connected layer with output size equal to the vocabulary size
     def forward(self, input_word: torch.Tensor) -> torch.Tensor:
         embeds = self.embeddings(input_word)    # (batch_size, embedding_dim)
         out = self.linear(embeds)               # (batch_size, vocab_size)
-        # Apply softmax activation to obtain probability distributions over the vocabulary for each training loop
-        log_probs = F.log_softmax(out, dim=1)   # (batch_size, vocab_size)
-        return log_probs
+        return out
 
 # Custom dataset for handling training data
 class Word2VecDataset(Dataset):
-    def __init__(self, training_data: List[Tuple[int, int]]) -> None:
+    def __init__(self, training_data: List[Tuple[List[int], int]], context_size: int) -> None:
         self.training_data = training_data
+        self.context_size = context_size
     
     def __len__(self) -> int:
         return len(self.training_data)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        input_word, context_word = self.training_data[idx]
-        # Use tensors here for CUDA compatibility
-        return torch.tensor(input_word, dtype=torch.long), torch.tensor(context_word, dtype=torch.long)
-
+        context, target = self.training_data[idx]
+        return torch.tensor(context, dtype=torch.long), torch.tensor(target, dtype=torch.long)
+    
 # Create a DataLoader for batching and shuffling data
-def create_data_loader(training_data: List[Tuple[int, int]], batch_size: int) -> DataLoader:
-    dataset = Word2VecDataset(training_data)
+def create_data_loader(training_data: List[Tuple[int, int]], batch_size: int, is_cbow: bool = True) -> DataLoader:
+    dataset = Word2VecDataset(training_data, is_cbow)
     return DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
 # Define the training loop
 def train_model(model: nn.Module, data_loader: DataLoader, epochs: int, learning_rate: float) -> None:
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=learning_rate)
 
-    # Move model to GPU if available
     model.to(device)
+
+    total_steps = epochs * len(data_loader)
+    progress_bar = tqdm(total=total_steps, desc="Training Progress")
 
     for epoch in range(epochs):
         total_loss = 0.0
-        for input_words, target_words in data_loader:
-            # Move input data to the same device as the model
-            input_words, target_words = input_words.to(device), target_words.to(device)
-            model.zero_grad()
-            log_probs = model(input_words)
-            loss = criterion(log_probs, target_words)
+        for context_words, target_words in data_loader:
+            context_words, target_words = context_words.to(device), target_words.to(device)
+            optimizer.zero_grad()
+            output = model(context_words)
+            loss = criterion(output, target_words)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        print(f'Epoch {epoch + 1}/{epochs}, Loss: {total_loss:.4f}')
+
+            progress_bar.update(1)
+            progress_bar.set_postfix({"Epoch": epoch + 1, "Loss": f"{total_loss:.4f}"})
+
+        print(f'\nEpoch {epoch + 1}/{epochs}, Loss: {total_loss:.4f}')
+
+    progress_bar.close()
+
 
 def save_model(model: nn.Module, filepath: str) -> None:
     """
@@ -292,13 +316,15 @@ if __name__ == "__main__":
         print("Failed to download or extract the dataset. Exiting.")
         exit(1)
 
+    # Use the new preprocess_text8 function here
     token_indices, vocab = preprocess_text8(text8_path)
     if token_indices is None or vocab is None:
         print("Failed to preprocess the dataset. Exiting.")
         exit(1)
     
-    # Create training data
-    training_data = create_training_data(token_indices)
+    # Print some information about the preprocessed data
+    print(f"Preprocessing complete. Vocabulary size: {len(vocab)}")
+    print(f"Total tokens: {len(token_indices)}")
 
     # Constants
     VOCAB_SIZE = len(vocab)
@@ -306,15 +332,25 @@ if __name__ == "__main__":
     BATCH_SIZE = 256
     EPOCHS = 5
     LEARNING_RATE = 0.01
+    WINDOW_SIZE = 2
+    CONTEXT_SIZE = 2 * WINDOW_SIZE
+
+    # Create training data
+    training_data = create_training_data(token_indices)
 
     # Create DataLoader
     data_loader = create_data_loader(training_data, BATCH_SIZE)
     
     # Model selection
     model_type = input("Choose model type (cbow/skipgram): ").lower()
+    # In your main script
     if model_type == "cbow":
-        model = CBOWModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM)
+        training_data = create_training_data(token_indices, window_size=WINDOW_SIZE)
+        data_loader = DataLoader(Word2VecDataset(training_data, CONTEXT_SIZE), batch_size=BATCH_SIZE, shuffle=True)
+        model = CBOWModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM, context_size=CONTEXT_SIZE)
     elif model_type == "skipgram":
+        training_data = create_training_data(token_indices, window_size=2)
+        data_loader = create_data_loader(training_data, BATCH_SIZE, is_cbow=False)
         model = SkipGramModel(vocab_size=VOCAB_SIZE, embedding_dim=EMBEDDING_DIM)
     else:
         print("Invalid model type. Exiting.")
@@ -332,10 +368,7 @@ if __name__ == "__main__":
     save_path = f"{model_type}_model.pth"
     save_model(model, save_path)
 
-     # After training and saving the model:
-    model_type = "cbow"  # or "skipgram", depending on what you chose earlier
-    save_path = f"{model_type}_model.pth"
-
+    # After training and saving the model:
     # Load the model
     loaded_model = load_model(model_type, VOCAB_SIZE, EMBEDDING_DIM, save_path)
 
